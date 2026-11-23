@@ -1,14 +1,63 @@
-{
-	"required": true,
-	"package": "com.example.client.mixin",
-	"compatibilityLevel": "JAVA_25",
-	"client": [
-		"ExampleClientMixin"
-	],
-	"injectors": {
-		"defaultRequire": 1
-	},
-	"overwrites": {
-		"requireAnnotations": true
-	}
+package com.example.omniclient;
+
+import com.mojang.brigadier.arguments.StringArgumentType;
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.render.Camera;
+import net.minecraft.client.render.GameRenderer;
+import net.minecraft.client.util.InputUtil;
+import net.minecraft.text.Text;
+import net.minecraft.util.math.BlockPos;
+import org.lwjgl.glfw.GLFW;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+public class OmniClientMod implements ClientModInitializer {
+    public static KeyBinding zoomKey, sprintToggleKey;
+    private static boolean autoSprint = false;
+    private static String hudNote = "";
+
+    @Override
+    public void onInitializeClient() {
+        zoomKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.omniclient.zoom", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_C, "category.omniclient.controls"));
+        sprintToggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.omniclient.togglesprint", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_I, "category.omniclient.controls"));
+
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            while (sprintToggleKey.wasPressed()) {
+                autoSprint = !autoSprint;
+                if (client.player != null) client.player.sendMessage(Text.literal("§b[OmniClient] §fToggle Sprint: " + (autoSprint ? "§aON" : "§cOFF")), true);
+            }
+            if (autoSprint && client.player != null && client.player.forwardSpeed > 0 && !client.player.isSneaking()) client.player.setSprinting(true);
+        });
+
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(ClientCommandManager.literal("note")
+            .then(ClientCommandManager.argument("message", StringArgumentType.greedyString()).executes(ctx -> { hudNote = StringArgumentType.getString(ctx, "message"); ctx.getSource().sendFeedback(Text.literal("§b[OmniClient] §fHUD Note updated!")); return 1; }))
+            .executes(ctx -> { hudNote = ""; ctx.getSource().sendFeedback(Text.literal("§b[OmniClient] §fHUD Note cleared.")); return 1; })));
+
+        HudRenderCallback.EVENT.register((drawContext, tickCounter) -> {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null || client.getDebugHud().shouldShowDebugHud()) return;
+            BlockPos pos = client.player.getBlockPos();
+            drawContext.drawTextWithShadow(client.textRenderer, String.format("§bXYZ: §f%d, %d, %d", pos.getX(), pos.getY(), pos.getZ()), 8, 8, 0xFFFFFF);
+            drawContext.drawTextWithShadow(client.textRenderer, String.format("§bFPS: §f%d", client.getCurrentFps()), 8, 20, 0xFFFFFF);
+            drawContext.drawTextWithShadow(client.textRenderer, autoSprint ? "§a[Sprint: ON]" : "§7[Sprint: OFF]", 8, 32, 0xFFFFFF);
+            if (!hudNote.isEmpty()) drawContext.drawTextWithShadow(client.textRenderer, "§eNote: §f" + hudNote, 8, 46, 0xFFFFFF);
+        });
+    }
+
+    @Mixin(GameRenderer.class)
+    public static class GameRendererMixin {
+        @Inject(method = "getFov", at = @At("RETURN"), cancellable = true)
+        private void onGetFov(Camera camera, float tickDelta, boolean changingFov, CallbackInfoReturnable<Float> cir) {
+            if (OmniClientMod.zoomKey != null && OmniClientMod.zoomKey.isPressed()) cir.setReturnValue(cir.getReturnValue() * 0.25f);
+        }
+    }
 }
